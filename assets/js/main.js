@@ -134,7 +134,7 @@ const raycastAPI = {
             .add(reflectColor.multiply(material.albedo[2]))
             .add(refractColor.multiply(material.albedo[3]));
     },
-    render: function (spheres, lights) {
+    render: function *(spheres, lights) {
         let framebuffer = {};
         const {width, height} = this.config;
         const fov = Math.floor(Math.PI / 2.);
@@ -144,14 +144,12 @@ const raycastAPI = {
                 const y = -(2 * (j + 0.5) / height - 1) * Math.tan(fov / 2.);
                 let dir = new Vector(x, y, -1).unit();
                 framebuffer[i + j * width] = this.castRay(new Vector(0, 0, 0), dir, spheres, lights);
-            }
-        }
-        for (let j = 0; j < height; ++j) {
-            for (let i = 0; i < width; ++i) {
                 this.drawPixel(i, j, framebuffer[i + j * width]);
             }
+            yield;
+            this.context.putImageData(this.canvas, 0, 0);
         }
-        this.context.putImageData(this.canvas, 0, 0);
+        yield 'done.'
     },
     init: function () {
         this.canvasInit("render");
@@ -168,7 +166,13 @@ const raycastAPI = {
         lights.push(new Light(new Vector(-20, 20, 20), 1.5));
         lights.push(new Light(new Vector(30, 50, -25), 1.8));
         lights.push(new Light(new Vector(30, 20, 30), 1.7));
-        this.render(spheres, lights);
+
+        const renderLine = this.render(spheres, lights);
+        const renderStream = setInterval(function(){
+            if(renderLine.next().value){
+                clearInterval(renderStream);
+            }
+        },0);
     }
 };
 
