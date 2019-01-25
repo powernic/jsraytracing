@@ -83,7 +83,19 @@ const raycastAPI = {
                 material.material = spheres[i].material;
             }
         }
-        return spheresDist < 1000;
+        let checkerboardDist = Number.MAX_VALUE;
+        if(Math.abs(dir.y) > 1e-3){
+            let d = -(orig.y+4)/dir.y;
+            const pt = orig.add(dir.multiply(d));
+            if(d > 0 && Math.abs(pt.x) < 10 && pt.z < -10 && pt.z > -30 && d < spheresDist){
+                checkerboardDist = d;
+                hit.value = pt;
+                N.value = new Vector(0,1,0);
+                material.material.diffuseColor = (Math.floor(0.5*hit.value.x + 1000) + Math.floor(0.5*hit.value.z )) & 1 ? new Vector(1,1,1) : new Vector(1,0.7,0.3);
+                material.material.diffuseColor = material.material.diffuseColor.multiply(0.3);
+            }
+        }
+        return Math.min(spheresDist,checkerboardDist) < 1000;
     },
     castRay: function (orig, dir, spheres, lights, depth = 0) {
         let point = {value: 0}, N = {value: 0}, material = {material: new Material()};
@@ -91,20 +103,21 @@ const raycastAPI = {
             return new Vector(0.2, 0.7, 0.8); // background color
         }
         material = material.material;
-
-        const reflectDir = this.reflect(dir, N.value).unit();
-        const refractDir = this.refract(dir, N.value,material.refractiveIndex).unit();
-        const reflectOrig = reflectDir.multiplyScal(N.value) < 0 ? point.value.subtract(N.value.multiply(1e-3)) : point.value.add(N.value.multiply(1e-3));
-        const refractOrig = refractDir.multiplyScal(N.value) < 0 ? point.value.subtract(N.value.multiply(1e-3)) : point.value.add(N.value.multiply(1e-3));
+        N = N.value;
+        point = point.value;
+        const reflectDir = this.reflect(dir, N).unit();
+        const refractDir = this.refract(dir, N,material.refractiveIndex).unit();
+        const reflectOrig = reflectDir.multiplyScal(N) < 0 ? point.subtract(N.multiply(1e-3)) : point.add(N.multiply(1e-3));
+        const refractOrig = refractDir.multiplyScal(N) < 0 ? point.subtract(N.multiply(1e-3)) : point.add(N.multiply(1e-3));
         const reflectColor = this.castRay(reflectOrig, reflectDir, spheres, lights, depth + 1);
         const refractColor = this.castRay(refractOrig, refractDir, spheres, lights, depth + 1);
 
         let diffuseLightIntensity = 0,
             specularLightIntensity = 0;
         for (let i = 0; i < lights.length; i++) {
-            const lightDir = lights[i].position.subtract(point.value).unit();
-            const lightDistance = lights[i].position.subtract(point.value).length();
-            const shadowOrig = lightDir.multiplyScal(N.value) < 0 ? point.value.subtract(N.value.multiply(1e-3)) : point.value.add(N.value.multiply(1e-3));
+            const lightDir = lights[i].position.subtract(point).unit();
+            const lightDistance = lights[i].position.subtract(point).length();
+            const shadowOrig = lightDir.multiplyScal(N) < 0 ? point.subtract(N.multiply(1e-3)) : point.add(N.multiply(1e-3));
 
             let shadowPt = {value: new Vector()}, shadowN = {};
             let tmpMaterial = {};
@@ -112,8 +125,8 @@ const raycastAPI = {
                 (shadowPt.value.subtract(shadowOrig).length() < lightDistance)) {
                 continue
             }
-            diffuseLightIntensity += lights[i].intensity * Math.max(0, lightDir.multiplyScal(N.value));
-            specularLightIntensity += Math.pow(Math.max(0, -this.reflect(lightDir.negative(), N.value)
+            diffuseLightIntensity += lights[i].intensity * Math.max(0, lightDir.multiplyScal(N));
+            specularLightIntensity += Math.pow(Math.max(0, -this.reflect(lightDir.negative(), N)
                 .multiplyScal(dir)), material.specularExponent) * lights[i].intensity;
         }
         return material.diffuseColor.multiply(diffuseLightIntensity).multiply(material.albedo[0])
