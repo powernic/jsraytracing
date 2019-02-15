@@ -115,7 +115,8 @@ Vector.subtract = function (a, b, c) {
 Vector.multiplyScal = function (a, b, c) {
     if (b instanceof Vector) {
         if(a === b){
-            c = a.length()*a.length()
+            var length = a.length();
+            c = length*length
         }else {
             c = a.length() * b.length() * Math.cos(a.angleTo(b));
         }

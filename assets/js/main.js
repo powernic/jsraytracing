@@ -39,6 +39,7 @@ const raycastAPI = {
         width: 0,
         height: 0
     },
+    time:0,
     canvasInit: function (canvasId) {
         const canvas = document.getElementById(canvasId);
         this.context = canvas.getContext('2d');
@@ -58,19 +59,12 @@ const raycastAPI = {
     reflect: function (dir, N) {
         return dir.subtract(N.multiply(2).multiply((dir.multiplyScal(N))));
     },
-    refract: function (dir, N, refractiveIndex) {
-        let cosi = -Math.max(-1, Math.min(1, dir.multiplyScal(N)));
-        let etai = 1;
-        let etat = refractiveIndex;
-        let n = new Vector(N.x, N.y, N.z);
-        if (cosi < 0) {
-            cosi = -cosi;
-            etat = [etai, etai = etat][0]; // swap
-            n = N.negative();
-        }
-        const eta = etai/etat;
+    refract: function (dir, N, refractiveIndex, eta_t, eta_i=1.) {
+        const cosi = -Math.max(-1, Math.min(1, dir.multiplyScal(N)));
+        if (cosi < 0) return this.refract(dir, N.negative(), eta_i, eta_t);
+        const eta = eta_i/eta_t;
         const k = 1 - eta*eta*(1 - cosi*cosi);
-        return k < 0 ? new Vector(0,0,0) : dir.multiply(eta).add(n.multiply(eta*cosi - Math.sqrt(k)));
+        return k < 0 ? new Vector(1,0,0) : dir.multiply(eta).add(N.multiply(eta*cosi - Math.sqrt(k)));
     },
     sceneIntersect: function (orig, dir, spheres, hit, N, material, debug = false) {
         let spheresDist = Number.MAX_VALUE;
@@ -107,17 +101,22 @@ const raycastAPI = {
         point = point.value;
         const reflectDir = this.reflect(dir, N).unit();
         const refractDir = this.refract(dir, N,material.refractiveIndex).unit();
-        const reflectOrig = reflectDir.multiplyScal(N) < 0 ? point.subtract(N.multiply(1e-3)) : point.add(N.multiply(1e-3));
-        const refractOrig = refractDir.multiplyScal(N) < 0 ? point.subtract(N.multiply(1e-3)) : point.add(N.multiply(1e-3));
+        const Nm = N.multiply(1e-3);
+        const pSub = point.subtract(Nm);
+        const pAdd = point.add(Nm);
+        const reflectOrig = reflectDir.multiplyScal(N) < 0 ? pSub : pAdd;
+        const refractOrig = refractDir.multiplyScal(N) < 0 ? pSub : pAdd;
         const reflectColor = this.castRay(reflectOrig, reflectDir, spheres, lights, depth + 1);
         const refractColor = this.castRay(refractOrig, refractDir, spheres, lights, depth + 1);
 
         let diffuseLightIntensity = 0,
             specularLightIntensity = 0;
         for (let i = 0; i < lights.length; i++) {
-            const lightDir = lights[i].position.subtract(point).unit();
-            const lightDistance = lights[i].position.subtract(point).length();
-            const shadowOrig = lightDir.multiplyScal(N) < 0 ? point.subtract(N.multiply(1e-3)) : point.add(N.multiply(1e-3));
+            const lightSub = lights[i].position.subtract(point);
+            const lightDir = lightSub.unit();
+            const lightDistance = lightSub.length();
+            const lightDirScal = lightDir.multiplyScal(N);
+            const shadowOrig = lightDirScal < 0 ? point.subtract(Nm) : point.add(Nm);
 
             let shadowPt = {value: new Vector()}, shadowN = {};
             let tmpMaterial = {};
@@ -125,7 +124,7 @@ const raycastAPI = {
                 (shadowPt.value.subtract(shadowOrig).length() < lightDistance)) {
                 continue
             }
-            diffuseLightIntensity += lights[i].intensity * Math.max(0, lightDir.multiplyScal(N));
+            diffuseLightIntensity += lights[i].intensity * Math.max(0, lightDirScal) ;
             specularLightIntensity += Math.pow(Math.max(0, -this.reflect(lightDir.negative(), N)
                 .multiplyScal(dir)), material.specularExponent) * lights[i].intensity;
         }
@@ -137,19 +136,20 @@ const raycastAPI = {
     render: function *(spheres, lights) {
         let framebuffer = {};
         const {width, height} = this.config;
-        const fov = Math.floor(Math.PI / 2.);
+        const fov = Math.floor(Math.PI / 3.);
         for (let j = 0; j < height; j++) {
             for (let i = 0; i < width; i++) {
-                const x = (2 * (i + 0.5) / width - 1) * Math.tan(fov / 2.) * width / height;
-                const y = -(2 * (j + 0.5) / height - 1) * Math.tan(fov / 2.);
-                let dir = new Vector(x, y, -1).unit();
+                const dir_x =  (i + 0.5) -  width/2.;
+                const dir_y = -(j + 0.5) + height/2.; // flips the image at the same time
+                const dir_z = -height / (2. * Math.tan(fov / 2.));
+                let dir = new Vector(dir_x, dir_y, dir_z).unit();
                 framebuffer[i + j * width] = this.castRay(new Vector(0, 0, 0), dir, spheres, lights);
                 this.drawPixel(i, j, framebuffer[i + j * width]);
             }
             yield;
             this.context.putImageData(this.canvas, 0, 0);
         }
-        yield 'done.'
+        yield console.log('Время выполнения = ', performance.now() - this.time, ' ms');
     },
     init: function () {
         this.canvasInit("render");
@@ -158,7 +158,7 @@ const raycastAPI = {
         const red_rubber =  new Material(1.0,[0.9, 0.1, 0.0, 0.0], new Vector(0.3, 0.1, 0.1), 10);
         const mirror =      new Material(1.0,[0.0, 10., 0.8, 0.0], new Vector(1.0, 1.0, 1.0), 1425.);
         let spheres = [];
-        spheres.push(new Sphere(new Vector(-3, 0, -16), 2, ivory));
+        spheres.push(new Sphere(new Vector(-10, 0, -16), 2, ivory));
         spheres.push(new Sphere(new Vector(-1, -1.5, -12), 2, glass));
         spheres.push(new Sphere(new Vector(1.5, -0.5, -18), 3, red_rubber));
         spheres.push(new Sphere(new Vector(7, 5, -18), 4, mirror));
@@ -168,6 +168,7 @@ const raycastAPI = {
         lights.push(new Light(new Vector(30, 20, 30), 1.7));
 
         const renderLine = this.render(spheres, lights);
+        this.time = performance.now();
         const renderStream = setInterval(function(){
             if(renderLine.next().value){
                 clearInterval(renderStream);
