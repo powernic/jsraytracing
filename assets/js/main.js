@@ -40,6 +40,11 @@ const raycastAPI = {
         height: 0
     },
     time:0,
+    envmap : {
+        width: 0,
+        height: 0,
+        pixels : []
+    },
     canvasInit: function (canvasId) {
         const canvas = document.getElementById(canvasId);
         this.context = canvas.getContext('2d');
@@ -94,7 +99,10 @@ const raycastAPI = {
     castRay: function (orig, dir, spheres, lights, depth = 0) {
         let point = {value: 0}, N = {value: 0}, material = {material: new Material()};
         if (depth > 4 || !this.sceneIntersect(orig, dir, spheres, point, N, material)) {
-            return new Vector(0.2, 0.7, 0.8); // background color
+            const a = Math.max(0, Math.min(raycastAPI.envmap.width - 1,  ((Math.atan2(dir.z, dir.x) / (2 * Math.PI) + .5) * raycastAPI.envmap.width)))^0;
+            const b = Math.max(0, Math.min(raycastAPI.envmap.height - 1, (Math.acos(dir.y) / Math.PI * raycastAPI.envmap.height)))^0;
+            const ind = (a * 4) + (b * 4) * raycastAPI.envmap.width;
+            return new Vector(raycastAPI.envmap.pixels[ind]/255, raycastAPI.envmap.pixels[ind+1]/255,raycastAPI.envmap.pixels[ind + 2]/255);
         }
         material = material.material;
         N = N.value;
@@ -137,22 +145,46 @@ const raycastAPI = {
         let framebuffer = {};
         const {width, height} = this.config;
         const fov = Math.floor(Math.PI / 3.);
+        const dir_z = -height / (3. * Math.tan(fov / 2.));
         for (let j = 0; j < height; j++) {
             for (let i = 0; i < width; i++) {
                 const dir_x =  (i + 0.5) -  width/2.;
                 const dir_y = -(j + 0.5) + height/2.; // flips the image at the same time
-                const dir_z = -height / (2. * Math.tan(fov / 2.));
                 let dir = new Vector(dir_x, dir_y, dir_z).unit();
                 framebuffer[i + j * width] = this.castRay(new Vector(0, 0, 0), dir, spheres, lights);
                 this.drawPixel(i, j, framebuffer[i + j * width]);
             }
-            yield;
-            this.context.putImageData(this.canvas, 0, 0);
+            if (j % 10  === 0){
+                yield;
+                this.context.putImageData(this.canvas, 0, 0);
+            }
         }
+        this.context.putImageData(this.canvas, 0, 0);
         yield console.log('Время выполнения = ', performance.now() - this.time, ' ms');
+    },
+    setEnv: function () {
+        let img = new Image();
+        img.onload = function () {
+            let canvas = document.createElement('canvas');
+            canvas.id = "env";
+            canvas.width = this.width;
+            canvas.height = this.height;
+            raycastAPI.envmap.width = canvas.width;
+            raycastAPI.envmap.height = canvas.height;
+
+            const body = document.getElementsByTagName("body")[0];
+            body.appendChild(canvas);
+            let context = canvas.getContext('2d');
+            context.drawImage(img, 0, 0, this.width, this.height);
+            raycastAPI.envmap.width = canvas.width;
+            raycastAPI.envmap.pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+            canvas.remove();
+        };
+        img.src = 'envmap.jpg';
     },
     init: function () {
         this.canvasInit("render");
+        this.setEnv();
         const ivory =       new Material(1.0,[0.6, 0.3, 0.1, 0.0], new Vector(0.4, 0.4, 0.3), 50);
         const glass =       new Material(1.5,[0.0, 0.5, 0.1, 0.8], new Vector(0.6, 0.7, 0.8), 125.);
         const red_rubber =  new Material(1.0,[0.9, 0.1, 0.0, 0.0], new Vector(0.3, 0.1, 0.1), 10);
@@ -170,6 +202,7 @@ const raycastAPI = {
         const renderLine = this.render(spheres, lights);
         this.time = performance.now();
         const renderStream = setInterval(function(){
+            if(raycastAPI.envmap.pixels.length === 0 ) return false;
             if(renderLine.next().value){
                 clearInterval(renderStream);
             }
