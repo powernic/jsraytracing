@@ -19,9 +19,13 @@ Vector.prototype = {
     multiplyScal: function (v) {
         if (v instanceof Vector) {
             if(this === v){
-                return this.length()*this.length();
+                const length = Math.sqrt(this.dot(this));
+                return length*length;
             }else {
-                return this.length() * v.length() * Math.cos(this.angleTo(v));
+                const lengthV1 = Math.sqrt(this.dot(this));
+                const lengthV2 = Math.sqrt(v.dot(v));
+                if(lengthV1 === 0 || lengthV2 === 0 ) return 0;
+                return this.dot(v);
             }
         }
         else return new Vector(this.x * v, this.y * v, this.z * v);
@@ -35,7 +39,7 @@ Vector.prototype = {
         else return new Vector(this.x / v, this.y / v, this.z / v);
     },
     equals: function (v) {
-        return this.x == v.x && this.y == v.y && this.z == v.z;
+        return this.x === v.x && this.y === v.y && this.z === v.z;
     },
     dot: function (v) {
         return this.x * v.x + this.y * v.y + this.z * v.z;
