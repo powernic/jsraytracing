@@ -122,8 +122,12 @@ Model.prototype = {
 };
 
 const raycastAPI = {
+    renderEnded : true,
+    frameInd: 0,
     canvas: '',
     context: '',
+    zoom: 1,
+    safeMemory : true, //На 25% уменьшает выделяемую память, за счет удаления альфаканала ( немного замедляет программу )
     config: {
         width: 0,
         height: 0
@@ -137,45 +141,31 @@ const raycastAPI = {
     canvasInit: function (canvasId) {
         const canvas = document.getElementById(canvasId);
         this.context = canvas.getContext('2d');
+        const width = canvas.width/this.zoom;
+        const height = canvas.height/this.zoom;
         this.canvas = this.context.getImageData(0, 0, canvas.width, canvas.height);
-        this.config = {width: canvas.width, height: canvas.height}
+        this.config = {width: width, height: height}
     },
-    drawPixel: function (x, y, vector, a = 255) {
-        const index = (x + y * this.config.width) * 4;
-        const r = 255 * vector.x;
-        const g = 255 * vector.y;
-        const b = 255 * vector.z;
-        this.canvas.data[index] = r;
-        this.canvas.data[index + 1] = g;
-        this.canvas.data[index + 2] = b;
-        this.canvas.data[index + 3] = a;
+    drawPixel: function (x, y, vector) {
+        for (let iN = 0; iN < this.zoom; iN++) {
+            for (let jN = 0; jN < this.zoom; jN++) {
+                const index = ((x * this.zoom + iN) + (y * this.zoom + jN) * this.config.width * this.zoom) * 4;
+                this.canvas.data[index] = 255 * vector.x;//r
+                this.canvas.data[index + 1] = 255 * vector.y;//g
+                this.canvas.data[index + 2] = 255 * vector.z;//b
+                this.canvas.data[index + 3] = 255;//a
+            }
+        }
     },
     reflect: function (dir, N) {
         return dir.subtract(N.multiply(2).multiply((dir.multiplyScal(N))));
     },
-    refract: function (dir, N, refractiveIndex, eta_t, eta_i = 1.) {
+    refract: function (dir, N, dasd, eta_t, eta_i = 1.) {
         const cosi = -Math.max(-1, Math.min(1, dir.multiplyScal(N)));
         if (cosi < 0) return this.refract(dir, N.negative(), eta_i, eta_t);
         const eta = eta_i / eta_t;
         const k = 1 - eta * eta * (1 - cosi * cosi);
         return k < 0 ? new Vector(1, 0, 0) : dir.multiply(eta).add(N.multiply(eta * cosi - Math.sqrt(k)));
-    },
-    angleInterSect(origin, dir, tnear) {
-        const tri = [new Vector(1, 0, -10), new Vector(-1, 0, -10), new Vector(0, -1, -10)];
-
-        const edge1 = tri[1].subtract(tri[0]);
-        const edge2 = tri[2].subtract(tri[0]);
-        const pvec = dir.cross(edge2);
-        const det = edge1.multiplyScal(pvec);
-        if (det < 1e-5) return false;
-        const tvec = origin.subtract(tri[0]);
-        const u = tvec.multiplyScal(pvec);
-        if (u < 0 || u > det) return false;
-        const qvec = tvec.cross(edge1);
-        const v = dir.multiplyScal(qvec);
-        if (v < 0 || u + v > det) return false;
-        tnear.value = edge2.multiplyScal(qvec) * (1.0 / det);
-        return tnear.value > 1e-5;
     },
     sceneIntersect: function (orig, dir, spheres, model, hit, N, material, debug = false) {
 
@@ -224,10 +214,15 @@ const raycastAPI = {
     },
     castRay: function (orig, dir, spheres, model, lights, depth = 0) {
         let point = {value: 0}, N = {value: 0}, material = {material: new Material()};
-        if (depth > 4 || !this.sceneIntersect(orig, dir, spheres, model, point, N, material)) {
+        const maxRefractDepth = 4;
+        if (depth > maxRefractDepth || !this.sceneIntersect(orig, dir, spheres, model, point, N, material)) {
             const a = Math.max(0, Math.min(raycastAPI.envmap.width - 1, ((Math.atan2(dir.z, dir.x) / (2 * Math.PI) + .5) * raycastAPI.envmap.width))) ^ 0;
             const b = Math.max(0, Math.min(raycastAPI.envmap.height - 1, (Math.acos(dir.y) / Math.PI * raycastAPI.envmap.height))) ^ 0;
-            const ind = (a * 4) + (b * 4) * raycastAPI.envmap.width;
+            let countPixels = 4;
+            if(this.safeMemory) countPixels = 3;
+
+            const ind = (a * countPixels) + (b * countPixels) * raycastAPI.envmap.width;
+
             return new Vector(raycastAPI.envmap.pixels[ind] / 255, raycastAPI.envmap.pixels[ind + 1] / 255, raycastAPI.envmap.pixels[ind + 2] / 255);
         }
         material = material.material;
@@ -268,17 +263,22 @@ const raycastAPI = {
             .add(refractColor.multiply(material.albedo[3]));
     },
     render: function* (spheres, lights, model) {
-        let framebuffer = {};
         const {width, height} = this.config;
-        const fov = Math.floor(Math.PI / 3.);
-        const dir_z = -height / (3. * Math.tan(fov / 2.));
+        const fov =Math.PI / 3.;
+        const dir_z = -height / (2. * Math.tan(fov / 2.));
         for (let j = 0; j < height; j++) {
             for (let i = 0; i < width; i++) {
+                //TODO:: Пропускать пиксели которые мы уже обработали
+                //Таким образом сокращаем время рендеринга на 25% по сравнению с предыдущей отрисовкой
+                /*if( !this.first && i % this.zoom === 0 && j % this.zoom === 0  ){
+                    this.drawPixel(i, j, new Vector(0.5,0.75,0.5), 1);
+                    continue;
+                }*/
                 const dir_x = (i + 0.5) - width / 2.;
                 const dir_y = -(j + 0.5) + height / 2.; // flips the image at the same time
                 let dir = new Vector(dir_x, dir_y, dir_z).unit();
-                framebuffer[i + j * width] = this.castRay(new Vector(0, 0, 0), dir, spheres, model, lights);
-                this.drawPixel(i, j, framebuffer[i + j * width]);
+                const color = this.castRay(new Vector(0, 0, 0), dir, spheres, model, lights);
+                this.drawPixel(i, j, color);
             }
             if (j % 10 === 0) {
                 yield;
@@ -286,9 +286,11 @@ const raycastAPI = {
             }
         }
         this.context.putImageData(this.canvas, 0, 0);
-        yield console.log('Время выполнения = ', performance.now() - this.time, ' ms');
+        console.log('Время выполнения = ', performance.now() - this.time, ' ms')
+        yield true ;
     },
     setEnv: function () {
+        if(raycastAPI.envmap.pixels.length > 0) return;
         let img = new Image();
         img.onload = function () {
             let canvas = document.createElement('canvas');
@@ -301,41 +303,71 @@ const raycastAPI = {
             const body = document.getElementsByTagName("body")[0];
             body.appendChild(canvas);
             let context = canvas.getContext('2d');
-            context.drawImage(img, 0, 0, this.width, this.height);
+
+            context.drawImage(img, 0, 0, canvas.width, canvas.height);
             raycastAPI.envmap.width = canvas.width;
-            raycastAPI.envmap.pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+            const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+            let ind = 0;
+            if(raycastAPI.safeMemory){
+                raycastAPI.envmap.pixels = new Uint8ClampedArray(canvas.width * canvas.height * 3);
+                for( let i = 0; i < data.length; i++ ){
+                    if((i+1) % 4 !== 0) {
+                        raycastAPI.envmap.pixels[ind] = data[i];
+                        ind++;
+                    }
+                }
+            }else{
+                raycastAPI.envmap.pixels = data;
+            }
+
             canvas.remove();
         };
-        img.src = 'envmap.jpg';
+
+        img.src = 'envmap_2.jpg';
+        /*
+        if(this.config.width > 1000){
+            img.src = 'envmap_2.jpg';
+        }else if( this.config.width > 500){
+            img.src = 'envmap_3.jpg';
+        }else{
+            img.src = 'envmap_4.jpg';
+        }
+        console.log(img.src);*/
     },
-    init: function () {
+    renderFrame: function (zoom) {
+        raycastAPI.renderEnded = false;
+        this.zoom = Math.pow(2, zoom);
         this.canvasInit("render");
         this.setEnv();
+
         const ivory = new Material(1.0, [0.6, 0.3, 0.1, 0.0], new Vector(0.4, 0.4, 0.3), 50);
         const glass = new Material(1.5, [0.0, 0.5, 0.1, 0.8], new Vector(0.6, 0.7, 0.8), 125.);
         const red_rubber = new Material(1.0, [0.9, 0.1, 0.0, 0.0], new Vector(0.3, 0.1, 0.1), 10);
         const mirror = new Material(1.0, [0.0, 10., 0.8, 0.0], new Vector(1.0, 1.0, 1.0), 1425.);
         let spheres = [];
-        spheres.push(new Sphere(new Vector(-10, 0, -16), 2, ivory));
-        spheres.push(new Sphere(new Vector(-1, -1.5, -12), 2, glass));
-        spheres.push(new Sphere(new Vector(1.5, -0.5, -18), 3, red_rubber));
-        spheres.push(new Sphere(new Vector(7, 5, -18), 4, mirror));
+        spheres.push(new Sphere(new Vector(-3,    0,   -16), 2, ivory));
+        spheres.push(new Sphere(new Vector(-1.0, -1.5, -12), 2, red_rubber));
+        spheres.push(new Sphere(new Vector( 1.5, -0.5, -18), 3, glass));
+        spheres.push(new Sphere(new Vector( 7,    5,   -18), 4, mirror));
         let lights = [];
         lights.push(new Light(new Vector(-20, 20, 20), 1.5));
         lights.push(new Light(new Vector(30, 50, -25), 1.8));
         lights.push(new Light(new Vector(30, 20, 30), 1.7));
 
-        const model = new Model(duck, mirror);
+        const model = new Model(duck, glass);
 
         const renderLine = this.render(spheres, lights, model);
         this.time = performance.now();
         const renderStream = setInterval(function () {
             if (raycastAPI.envmap.pixels.length === 0) return false;
             if (renderLine.next().value) {
+                raycastAPI.renderEnded = true;
+                raycastAPI.renderFrame(raycastAPI.frameInd);
+                raycastAPI.frameInd--;
                 clearInterval(renderStream);
             }
         }, 0);
     }
 };
-
-raycastAPI.init();
+raycastAPI.frameInd = 4;
+raycastAPI.renderFrame(raycastAPI.frameInd,true);
